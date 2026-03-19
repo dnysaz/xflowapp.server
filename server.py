@@ -32,6 +32,17 @@ HTTP_PORT   = int(os.environ.get("XFLOW_HTTP_PORT", 8080))
 WS_PORT     = int(os.environ.get("XFLOW_WS_PORT", 8081))
 AUTH_TOKEN  = os.environ.get("XFLOW_TOKEN", "")
 LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
+HTML_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html")
+
+
+def _read_html(filename: str, fallback: str) -> str:
+    """Baca file HTML dari folder html/, fallback ke string jika tidak ada."""
+    path = os.path.join(HTML_DIR, filename)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return fallback
 
 # ──────────────────────────────────────────────
 # Logging — console + file
@@ -135,11 +146,8 @@ async def proxy_handler(request: web.Request) -> web.Response:
     tunnel = manager.get(tunnel_id)
     if not tunnel:
         access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 404 [tunnel tidak ada]")
-        return web.Response(
-            status=404,
-            content_type="text/html",
-            text=f"<h3>xflow: tunnel '{tunnel_id}' tidak ditemukan atau sudah tutup.</h3>",
-        )
+        html_404 = _read_html("404.html", f"<h3>404 — tunnel '{tunnel_id}' not found.</h3>")
+        return web.Response(status=404, content_type="text/html", text=html_404)
 
     body_bytes = await request.read()
     body_b64 = base64.b64encode(body_bytes).decode() if body_bytes else ""

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 — Tunnel Not Found | xflow</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #000;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      display: flex;
+      align-items: center;
+      gap: 0;
+    }
+
+    .code {
+      font-size: 24px;
+      font-weight: 500;
+      line-height: 49px;
+      padding-right: 23px;
+      border-right: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .message {
+      padding-left: 23px;
+    }
+
+    .message h2 {
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 49px;
+    }
+
+    .sub {
+      margin-top: 12px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+      line-height: 1.6;
+    }
+
+    .sub a {
+      color: rgba(255,255,255,0.5);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .sub a:hover {
+      color: #fff;
+    }
+
+    .tunnel-id {
+      font-family: "SF Mono", "Fira Code", monospace;
+      background: rgba(255,255,255,0.08);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+    }
+
+    @media (prefers-color-scheme: light) {
+      body { background: #fff; color: #000; }
+      .code { border-right-color: rgba(0,0,0,0.3); }
+      .sub { color: rgba(0,0,0,0.4); }
+      .sub a { color: rgba(0,0,0,0.5); }
+      .sub a:hover { color: #000; }
+      .tunnel-id {
+        background: rgba(0,0,0,0.06);
+        color: rgba(0,0,0,0.5);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="code">404</div>
+    <div class="message">
+      <h2>This tunnel is not available.</h2>
+      <p class="sub">
+        The tunnel <span class="tunnel-id" id="tid"></span> has been closed or never existed.<br>
+        The owner may have stopped their local server.
+        <br><br>
+        Powered by <a href="#" onclick="return false">xflow</a>
+      </p>
+    </div>
+  </div>
+  <script>
+    const parts = window.location.pathname.split('/');
+    const idx = parts.indexOf('proxy');
+    if (idx !== -1 && parts[idx + 1]) {
+      document.getElementById('tid').textContent = parts[idx + 1];
+    }
+  </script>
+</body>
+</html>
