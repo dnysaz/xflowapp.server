@@ -1,25 +1,21 @@
 """
 server.py — xflow server utama.
 
-Dua endpoint:
-  WS  /ws/tunnel          ← xflow-client konek ke sini
-  HTTP /proxy/<tunnel_id>/<path> ← request publik masuk ke sini (Phase 1)
-
-Phase 2 nanti: subdomain-based routing via reverse proxy di depan (nginx/caddy).
-Kode di sini tidak perlu diubah — hanya tambah layer di depannya.
-
-Jalankan:
-  python server.py [--host 0.0.0.0] [--port 8080] [--token mytoken]
+Jalankan via manage.py:
+  python manage.py start    ← jalankan background, simpan PID
+  python manage.py stop     ← matikan server
+  python manage.py restart  ← restart
+  python manage.py log      ← lihat log akses IP
+  python manage.py status   ← cek apakah server aktif
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
-import sys
 import time
 import uuid
-import argparse
 
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
@@ -27,51 +23,61 @@ from aiohttp import web
 
 from tunnel import TunnelManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
+# ──────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────
+
+PUBLIC_HOST = os.environ.get("XFLOW_HOST", "145.79.12.100")
+HTTP_PORT   = int(os.environ.get("XFLOW_HTTP_PORT", 8080))
+WS_PORT     = int(os.environ.get("XFLOW_WS_PORT", 8081))
+AUTH_TOKEN  = os.environ.get("XFLOW_TOKEN", "")
+LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
+
+# ──────────────────────────────────────────────
+# Logging — console + file
+# ──────────────────────────────────────────────
+
+fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+_console = logging.StreamHandler()
+_console.setFormatter(fmt)
+
+_file = logging.FileHandler(LOG_FILE)
+_file.setFormatter(fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=[_console, _file])
 log = logging.getLogger("xflow-server")
 
+access_log = logging.getLogger("xflow-access")
+access_log.setLevel(logging.INFO)
+access_log.addHandler(_file)
+access_log.propagate = False
+
+# ──────────────────────────────────────────────
+# State
+# ──────────────────────────────────────────────
+
 manager = TunnelManager()
-
-# ──────────────────────────────────────────────
-# Auth
-# ──────────────────────────────────────────────
-
-AUTH_TOKEN = os.environ.get("XFLOW_TOKEN", "")
 
 
 def check_token(token: str) -> bool:
     if not AUTH_TOKEN:
-        return True  # Jika tidak di-set, bebas (mode dev)
+        return True
     return token == AUTH_TOKEN
 
 
 # ──────────────────────────────────────────────
-# WebSocket handler (xflow-client konek ke sini)
+# WebSocket handler
 # ──────────────────────────────────────────────
 
 async def ws_handler(websocket):
-    """
-    Protocol handshake:
-      client -> server : {"type": "hello", "token": "...", "version": "1"}
-      server -> client : {"type": "welcome", "tunnel_id": "abc123", "url": "http://host:port/proxy/abc123/"}
-                  atau : {"type": "error", "message": "..."}
-
-    Setelah itu server mengirim request HTTP ke client:
-      server -> client : {"type": "request", "request_id": "...", "method": "GET", "path": "/", "headers": {...}, "body": "...b64..."}
-      client -> server : {"type": "response", "request_id": "...", "status": 200, "headers": {...}, "body": "...b64..."}
-    """
     remote = websocket.remote_address
-    log.info(f"Koneksi baru dari {remote}")
+    log.info(f"Client konek dari {remote[0]}")
 
-    # Handshake
     try:
         raw = await asyncio.wait_for(websocket.recv(), timeout=10)
         msg = json.loads(raw)
-    except (asyncio.TimeoutError, json.JSONDecodeError) as e:
+    except (asyncio.TimeoutError, json.JSONDecodeError):
         await websocket.send(json.dumps({"type": "error", "message": "handshake timeout atau format salah"}))
         return
 
@@ -81,14 +87,11 @@ async def ws_handler(websocket):
 
     if not check_token(msg.get("token", "")):
         await websocket.send(json.dumps({"type": "error", "message": "token tidak valid"}))
-        log.warning(f"Token salah dari {remote}")
+        log.warning(f"Token salah dari {remote[0]}")
         return
 
-    # Buat tunnel
     tunnel = manager.create(websocket)
-    host = os.environ.get("XFLOW_HOST", "localhost")
-    port = os.environ.get("XFLOW_PORT", "8080")
-    public_url = f"http://{host}:{port}/proxy/{tunnel.tunnel_id}/"
+    public_url = f"http://{PUBLIC_HOST}:{HTTP_PORT}/proxy/{tunnel.tunnel_id}/"
 
     await websocket.send(json.dumps({
         "type": "welcome",
@@ -96,9 +99,8 @@ async def ws_handler(websocket):
         "url": public_url,
     }))
 
-    log.info(f"Tunnel [{tunnel.tunnel_id}] aktif → {public_url}")
+    log.info(f"Tunnel [{tunnel.tunnel_id}] aktif — {public_url}")
 
-    # Terima response dari client
     try:
         async for raw in websocket:
             try:
@@ -119,37 +121,31 @@ async def ws_handler(websocket):
 
 
 # ──────────────────────────────────────────────
-# HTTP Proxy handler (request publik)
+# HTTP Proxy handler
 # ──────────────────────────────────────────────
 
-import base64
-
 async def proxy_handler(request: web.Request) -> web.Response:
-    """
-    URL format: /proxy/<tunnel_id>/<path>
-    Semua request di-forward ke client via WebSocket tunnel.
-    """
     tunnel_id = request.match_info["tunnel_id"]
     path = "/" + request.match_info.get("path", "")
     if request.query_string:
         path += "?" + request.query_string
 
+    client_ip = request.headers.get("X-Forwarded-For", request.remote)
+
     tunnel = manager.get(tunnel_id)
     if not tunnel:
+        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 404 [tunnel tidak ada]")
         return web.Response(
             status=404,
             content_type="text/html",
-            text=f"<h3>xflow: tunnel '{tunnel_id}' tidak ditemukan atau sudah tutup.</h3>"
+            text=f"<h3>xflow: tunnel '{tunnel_id}' tidak ditemukan atau sudah tutup.</h3>",
         )
 
-    # Baca body
     body_bytes = await request.read()
     body_b64 = base64.b64encode(body_bytes).decode() if body_bytes else ""
 
-    # Siapkan payload request
     request_id = str(uuid.uuid4())[:8]
     headers = dict(request.headers)
-    # Hapus hop-by-hop headers
     for h in ("host", "connection", "transfer-encoding"):
         headers.pop(h, None)
 
@@ -162,43 +158,41 @@ async def proxy_handler(request: web.Request) -> web.Response:
         "body": body_b64,
     }
 
-    # Daftarkan future untuk response
     fut = tunnel.add_pending(request_id)
 
     try:
         await tunnel.websocket.send(json.dumps(payload))
     except Exception as e:
         tunnel.cancel_pending(request_id)
+        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 502 [gagal kirim ke tunnel]")
         return web.Response(status=502, text=f"xflow: gagal kirim ke tunnel — {e}")
 
-    # Tunggu response dari client (timeout 30 detik)
     try:
         resp_data = await asyncio.wait_for(fut, timeout=30)
     except asyncio.TimeoutError:
+        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 504 [timeout]")
         return web.Response(status=504, text="xflow: timeout menunggu response dari client")
     except Exception as e:
+        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 502 [tunnel error]")
         return web.Response(status=502, text=f"xflow: tunnel error — {e}")
 
-    # Decode response body
+    status = resp_data.get("status", 200)
     resp_body = base64.b64decode(resp_data.get("body", "")) if resp_data.get("body") else b""
     resp_headers = resp_data.get("headers", {})
-
-    # Hapus hop-by-hop headers dari response
     for h in ("transfer-encoding", "connection", "content-encoding"):
         resp_headers.pop(h, None)
         resp_headers.pop(h.title(), None)
 
-    return web.Response(
-        status=resp_data.get("status", 200),
-        headers=resp_headers,
-        body=resp_body,
-    )
+    size = len(resp_body)
+    access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} {status} {size}b")
+
+    return web.Response(status=status, headers=resp_headers, body=resp_body)
 
 
 async def status_handler(request: web.Request) -> web.Response:
-    """Simple status endpoint untuk cek server."""
     return web.json_response({
         "status": "ok",
+        "host": PUBLIC_HOST,
         "tunnels": manager.count,
         "tunnel_list": manager.list_all(),
     })
@@ -208,16 +202,7 @@ async def status_handler(request: web.Request) -> web.Response:
 # Entry point
 # ──────────────────────────────────────────────
 
-async def main(host: str, http_port: int, ws_port: int, token: str):
-    global AUTH_TOKEN
-    if token:
-        AUTH_TOKEN = token
-        os.environ["XFLOW_TOKEN"] = token
-
-    os.environ["XFLOW_HOST"] = host
-    os.environ["XFLOW_PORT"] = str(http_port)
-
-    # HTTP server (aiohttp)
+async def main():
     app = web.Application()
     app.router.add_get("/status", status_handler)
     app.router.add_route("*", "/proxy/{tunnel_id}/{path:.*}", proxy_handler)
@@ -225,18 +210,18 @@ async def main(host: str, http_port: int, ws_port: int, token: str):
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host, http_port)
+    site = web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
     await site.start()
-    log.info(f"HTTP proxy berjalan di http://{host}:{http_port}")
+    log.info(f"HTTP proxy    : http://0.0.0.0:{HTTP_PORT}  (publik: http://{PUBLIC_HOST}:{HTTP_PORT})")
 
-    # WebSocket server
-    ws_server = await websockets.serve(ws_handler, host, ws_port)
-    log.info(f"WebSocket server berjalan di ws://{host}:{ws_port}")
-    log.info(f"Auth token: {'aktif' if AUTH_TOKEN else 'nonaktif (mode dev)'}")
+    ws_server = await websockets.serve(ws_handler, "0.0.0.0", WS_PORT)
+    log.info(f"WebSocket     : ws://0.0.0.0:{WS_PORT}")
+    log.info(f"Auth token    : {'aktif' if AUTH_TOKEN else 'nonaktif (mode dev)'}")
+    log.info(f"Access log    : {LOG_FILE}")
     log.info("xflow-server siap. Tekan Ctrl+C untuk berhenti.")
 
     try:
-        await asyncio.Future()  # jalan selamanya
+        await asyncio.Future()
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Shutdown...")
     finally:
@@ -246,11 +231,4 @@ async def main(host: str, http_port: int, ws_port: int, token: str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="xflow server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
-    parser.add_argument("--http-port", type=int, default=8080, help="Port HTTP proxy (default: 8080)")
-    parser.add_argument("--ws-port", type=int, default=8081, help="Port WebSocket (default: 8081)")
-    parser.add_argument("--token", default="", help="Auth token (opsional, kosong = mode dev)")
-    args = parser.parse_args()
-
-    asyncio.run(main(args.host, args.http_port, args.ws_port, args.token))
+    asyncio.run(main())
