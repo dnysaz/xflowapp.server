@@ -4,98 +4,67 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>404 — Tunnel Not Found | xflow</title>
+  <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #000;
-      color: #fff;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
-
-    .container {
-      display: flex;
-      align-items: center;
-      gap: 0;
-    }
-
-    .code {
-      font-size: 24px;
-      font-weight: 500;
-      line-height: 49px;
-      padding-right: 23px;
-      border-right: 1px solid rgba(255,255,255,0.3);
-    }
-
-    .message {
-      padding-left: 23px;
-    }
-
-    .message h2 {
-      font-size: 14px;
-      font-weight: 400;
-      line-height: 49px;
-    }
-
-    .sub {
-      margin-top: 12px;
-      font-size: 12px;
-      color: rgba(255,255,255,0.4);
-      line-height: 1.6;
-    }
-
-    .sub a {
-      color: rgba(255,255,255,0.5);
-      text-decoration: underline;
-      text-underline-offset: 3px;
-    }
-
-    .sub a:hover {
-      color: #fff;
-    }
-
-    .tunnel-id {
-      font-family: "SF Mono", "Fira Code", monospace;
-      background: rgba(255,255,255,0.08);
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 11px;
-      color: rgba(255,255,255,0.5);
-    }
-
-    @media (prefers-color-scheme: light) {
-      body { background: #fff; color: #000; }
-      .code { border-right-color: rgba(0,0,0,0.3); }
-      .sub { color: rgba(0,0,0,0.4); }
-      .sub a { color: rgba(0,0,0,0.5); }
-      .sub a:hover { color: #000; }
-      .tunnel-id {
-        background: rgba(0,0,0,0.06);
-        color: rgba(0,0,0,0.5);
-      }
-    }
+    .fade-in         { animation: fade-in 0.5s ease forwards; }
+    .fade-in-delay-1 { animation: fade-in 0.5s ease 0.15s forwards; opacity: 0; }
+    .fade-in-delay-2 { animation: fade-in 0.5s ease 0.3s forwards; opacity: 0; }
   </style>
 </head>
-<body>
-  <div class="container">
-    <div class="code">404</div>
-    <div class="message">
-      <h2>This tunnel is not available.</h2>
-      <p class="sub">
-        The tunnel <span class="tunnel-id" id="tid"></span> has been closed or never existed.<br>
-        The owner may have stopped their local server.
-        <br><br>
-        Powered by <a href="#" onclick="return false">xflow</a>
-      </p>
+<body class="bg-black text-white min-h-screen flex flex-col items-center justify-center px-6">
+
+  <!-- Badge -->
+  <div class="fade-in text-center mb-10">
+    <div class="inline-flex items-center gap-2 mb-6">
+      <div class="w-2 h-2 rounded-full bg-red-500"></div>
+      <span class="text-xs tracking-widest uppercase text-zinc-500 font-medium">xflow tunnel</span>
+    </div>
+
+    <!-- 404 + message — gaya Next.js -->
+    <div class="flex items-center justify-center gap-0">
+      <span class="text-2xl font-semibold pr-6 border-r border-zinc-700 leading-none py-1">404</span>
+      <div class="pl-6 text-left">
+        <p class="text-sm font-normal leading-none">This tunnel is not available.</p>
+      </div>
     </div>
   </div>
+
+  <!-- Detail -->
+  <div class="fade-in-delay-1 text-center max-w-xs">
+    <p class="text-zinc-600 text-xs leading-relaxed">
+      The tunnel
+      <code id="tid" class="font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 text-xs px-1.5 py-0.5 rounded mx-1"></code>
+      has been closed or never existed.
+      <br class="mb-1">
+      The owner may have stopped their local server.
+    </p>
+  </div>
+
+  <!-- Divider -->
+  <div class="fade-in-delay-1 w-full max-w-xs border-t border-zinc-800 my-10"></div>
+
+  <!-- Support -->
+  <div class="fade-in-delay-2 text-center">
+    <p class="text-zinc-600 text-xs uppercase tracking-widest mb-4">Like this project?</p>
+    <a
+      href="https://buymeacoffee.com"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="inline-flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-600 text-white text-sm font-medium px-5 py-2.5 rounded-full transition-all duration-200"
+    >
+      <span>☕</span>
+      <span>Buy me a coffee</span>
+    </a>
+    <p class="text-zinc-700 text-xs mt-4">Built with ❤️ using xflow</p>
+  </div>
+
   <script>
     const parts = window.location.pathname.split('/');
-    const idx = parts.indexOf('proxy');
+    const idx   = parts.indexOf('proxy');
     if (idx !== -1 && parts[idx + 1]) {
       document.getElementById('tid').textContent = parts[idx + 1];
     }
