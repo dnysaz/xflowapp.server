@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>xflow — connecting...</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes countdown-ring {
+      from { stroke-dashoffset: 113; }
+      to   { stroke-dashoffset: 0; }
+    }
+    .fade-in { animation: fade-in 0.5s ease forwards; }
+    .fade-in-delay-1 { animation: fade-in 0.5s ease 0.15s forwards; opacity: 0; }
+    .fade-in-delay-2 { animation: fade-in 0.5s ease 0.3s forwards; opacity: 0; }
+    .fade-in-delay-3 { animation: fade-in 0.5s ease 0.5s forwards; opacity: 0; }
+    #ring {
+      stroke-dasharray: 113;
+      stroke-dashoffset: 113;
+      transition: stroke-dashoffset 1s linear;
+    }
+  </style>
+</head>
+<body class="bg-black text-white min-h-screen flex flex-col items-center justify-center px-6">
+
+  <!-- Logo + title -->
+  <div class="fade-in text-center mb-12">
+    <div class="inline-flex items-center gap-2 mb-4">
+      <div class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+      <span class="text-xs tracking-widest uppercase text-zinc-500 font-medium">xflow tunnel</span>
+    </div>
+    <h1 class="text-3xl font-semibold tracking-tight">Connecting to project</h1>
+    <p class="text-zinc-500 text-sm mt-2">Your tunnel is warming up, hang tight.</p>
+  </div>
+
+  <!-- Countdown ring -->
+  <div class="fade-in-delay-1 flex flex-col items-center gap-4 mb-12">
+    <div class="relative w-24 h-24">
+      <!-- Background ring -->
+      <svg class="absolute inset-0 -rotate-90" viewBox="0 0 40 40">
+        <circle cx="20" cy="20" r="18" fill="none" stroke="#27272a" stroke-width="2"/>
+        <circle id="ring" cx="20" cy="20" r="18" fill="none"
+          stroke="#4ade80" stroke-width="2"
+          stroke-linecap="round"/>
+      </svg>
+      <!-- Number -->
+      <div class="absolute inset-0 flex items-center justify-center">
+        <span id="count" class="text-3xl font-semibold tabular-nums">5</span>
+      </div>
+    </div>
+    <p class="text-zinc-500 text-sm">Redirecting in <span id="count-text">5</span> seconds...</p>
+  </div>
+
+  <!-- Divider -->
+  <div class="fade-in-delay-2 w-full max-w-xs border-t border-zinc-800 mb-10"></div>
+
+  <!-- Support section -->
+  <div class="fade-in-delay-3 text-center">
+    <p class="text-zinc-600 text-xs uppercase tracking-widest mb-4">Like this project?</p>
+    <a
+      href="https://buymeacoffee.com"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="inline-flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-600 text-white text-sm font-medium px-5 py-2.5 rounded-full transition-all duration-200"
+    >
+      <span>☕</span>
+      <span>Buy me a coffee</span>
+    </a>
+    <p class="text-zinc-700 text-xs mt-4">Built with ❤️ using xflow</p>
+  </div>
+
+  <!-- Skip link -->
+  <button
+    onclick="redirect()"
+    class="fixed bottom-6 right-6 text-xs text-zinc-700 hover:text-zinc-400 transition-colors underline underline-offset-2"
+  >
+    skip →
+  </button>
+
+  <script>
+    const SECONDS = 5;
+    const ring    = document.getElementById('ring');
+    const countEl = document.getElementById('count');
+    const countTxt = document.getElementById('count-text');
+
+    // Ambil tunnel ID dari URL: /proxy/<tunnel_id>/
+    const parts    = window.location.pathname.split('/');
+    const proxyIdx = parts.indexOf('proxy');
+    const tunnelId = proxyIdx !== -1 ? parts[proxyIdx + 1] : null;
+
+    // URL tujuan = URL yang sama tapi dengan flag ?_xflow_ready=1
+    // agar server tahu harus forward ke app, bukan welcome page
+    const dest = window.location.href.replace('?_xflow_welcome=1', '') +
+      (window.location.search ? '&_xflow_ready=1' : '?_xflow_ready=1');
+
+    function redirect() {
+      window.location.href = dest;
+    }
+
+    let remaining = SECONDS;
+    const circumference = 2 * Math.PI * 18; // 113.1
+
+    function tick() {
+      remaining--;
+      countEl.textContent  = remaining;
+      countTxt.textContent = remaining;
+
+      // Update ring progress
+      const progress = (SECONDS - remaining) / SECONDS;
+      ring.style.strokeDashoffset = circumference - (circumference * progress);
+
+      if (remaining <= 0) {
+        redirect();
+      } else {
+        setTimeout(tick, 1000);
+      }
+    }
+
+    // Mulai setelah 1 detik agar animasi masuk selesai dulu
+    setTimeout(() => {
+      ring.style.strokeDashoffset = circumference - (circumference * (1 / SECONDS));
+      setTimeout(tick, 1000);
+    }, 600);
+  </script>
+</body>
+</html>

@@ -33,6 +33,7 @@ WS_PORT     = int(os.environ.get("XFLOW_WS_PORT", 8081))
 AUTH_TOKEN  = os.environ.get("XFLOW_TOKEN", "")
 LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
 HTML_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html")
+WELCOME_PARAM = "_xflow_ready"   # jika query param ini ada, skip welcome page
 
 
 def _read_html(filename: str, fallback: str) -> str:
@@ -142,6 +143,25 @@ async def proxy_handler(request: web.Request) -> web.Response:
         path += "?" + request.query_string
 
     client_ip = request.headers.get("X-Forwarded-For", request.remote)
+
+    # Tampilkan welcome page jika request pertama (belum ada _xflow_ready)
+    # Hanya untuk GET request dan bukan asset (js, css, image, dll)
+    is_asset = any(path.endswith(ext) for ext in (
+        ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+        ".ico", ".woff", ".woff2", ".ttf", ".map", ".json",
+    ))
+    if (
+        request.method == "GET"
+        and not is_asset
+        and WELCOME_PARAM not in request.query_string
+        and path in ("/", "")
+    ):
+        # Cek dulu apakah tunnel ada — jika tidak, langsung 404
+        if not manager.get(tunnel_id):
+            pass  # akan ditangani di bawah
+        else:
+            html_welcome = _read_html("welcome.html", "<meta http-equiv='refresh' content='0'>")
+            return web.Response(status=200, content_type="text/html", text=html_welcome)
 
     tunnel = manager.get(tunnel_id)
     if not tunnel:
