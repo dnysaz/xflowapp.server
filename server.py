@@ -226,12 +226,21 @@ async def status_handler(request: web.Request) -> web.Response:
     })
 
 
+async def home_handler(request: web.Request) -> web.Response:
+    """Landing page untuk / dan /proxy/ agar tidak muncul error 404 default."""
+    html = _read_html("home.html", "<h2>xflow server is running.</h2>")
+    html = html.replace("{{ host }}", f"{PUBLIC_HOST}:{HTTP_PORT}")
+    return web.Response(status=200, content_type="text/html", text=html)
+
+
 # ──────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────
 
 async def main():
     app = web.Application()
+    app.router.add_get("/", home_handler)
+    app.router.add_get("/proxy/", home_handler)
     app.router.add_get("/status", status_handler)
     app.router.add_route("*", "/proxy/{tunnel_id}/{path:.*}", proxy_handler)
     app.router.add_route("*", "/proxy/{tunnel_id}", proxy_handler)

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>xflow</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in         { animation: fade-in 0.5s ease forwards; }
+    .fade-in-delay-1 { animation: fade-in 0.5s ease 0.1s forwards; opacity: 0; }
+    .fade-in-delay-2 { animation: fade-in 0.5s ease 0.2s forwards; opacity: 0; }
+    .fade-in-delay-3 { animation: fade-in 0.5s ease 0.35s forwards; opacity: 0; }
+  </style>
+</head>
+<body class="bg-black text-white min-h-screen flex flex-col items-center justify-center px-6">
+
+  <!-- Badge -->
+  <div class="fade-in flex items-center gap-2 mb-10">
+    <div class="w-2 h-2 rounded-full bg-green-400"></div>
+    <span class="text-xs tracking-widest uppercase text-zinc-500 font-medium">xflow server</span>
+  </div>
+
+  <!-- Title -->
+  <div class="fade-in-delay-1 text-center mb-10">
+    <h1 class="text-4xl font-semibold tracking-tight mb-3">xflow</h1>
+    <p class="text-zinc-500 text-sm max-w-xs leading-relaxed">
+      Expose your localhost to the internet — fast, simple, and open source.
+    </p>
+  </div>
+
+  <!-- Stats -->
+  <div id="stats" class="fade-in-delay-2 flex items-center gap-2 mb-10 bg-zinc-900 border border-zinc-800 rounded-full px-5 py-2">
+    <div class="w-1.5 h-1.5 rounded-full bg-green-400"></div>
+    <span class="text-zinc-400 text-xs">Server is running</span>
+    <span class="text-zinc-700 mx-1">·</span>
+    <span id="tunnel-count" class="text-xs text-zinc-400">0 active tunnels</span>
+  </div>
+
+  <!-- Divider -->
+  <div class="fade-in-delay-2 w-full max-w-xs border-t border-zinc-800 mb-10"></div>
+
+  <!-- Install instructions -->
+  <div class="fade-in-delay-3 w-full max-w-sm">
+    <p class="text-zinc-600 text-xs uppercase tracking-widest text-center mb-5">Get started</p>
+
+    <div class="space-y-3">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
+        <p class="text-zinc-600 text-xs mb-1.5">1. Install client</p>
+        <code class="text-zinc-300 text-xs">./install.sh</code>
+      </div>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
+        <p class="text-zinc-600 text-xs mb-1.5">2. Run from your project</p>
+        <code class="text-zinc-300 text-xs">xflow serve</code>
+      </div>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
+        <p class="text-zinc-600 text-xs mb-1.5">3. Share the public URL</p>
+        <code class="text-zinc-300 text-xs">http://{{ host }}/proxy/&lt;tunnel-id&gt;/</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="fade-in-delay-3 mt-12 text-center">
+    <p class="text-zinc-700 text-xs">Built with ❤️ using xflow</p>
+  </div>
+
+  <script>
+    // Fetch tunnel count dari /status
+    fetch('/status')
+      .then(r => r.json())
+      .then(d => {
+        const n = d.tunnels || 0;
+        document.getElementById('tunnel-count').textContent =
+          n === 0 ? 'No active tunnels' : `${n} active tunnel${n > 1 ? 's' : ''}`;
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>
