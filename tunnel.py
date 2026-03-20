@@ -20,14 +20,14 @@ def generate_tunnel_id(length: int = 6) -> str:
 
 class Tunnel:
     def __init__(self, tunnel_id: str, websocket):
-        self.tunnel_id = tunnel_id
-        self.websocket = websocket
+        self.tunnel_id  = tunnel_id
+        self.websocket  = websocket
         self.pending: dict[str, asyncio.Future] = {}
         self.created_at = time.time()
 
     def add_pending(self, request_id: str) -> asyncio.Future:
         loop = asyncio.get_event_loop()
-        fut = loop.create_future()
+        fut  = loop.create_future()
         self.pending[request_id] = fut
         return fut
 
@@ -44,15 +44,22 @@ class Tunnel:
 
 class TunnelManager:
     def __init__(self):
-        # tunnel_id -> Tunnel
         self._tunnels: dict[str, Tunnel] = {}
 
-    def create(self, websocket) -> Tunnel:
-        # Pastikan tunnel_id unik
-        while True:
-            tid = generate_tunnel_id()
-            if tid not in self._tunnels:
-                break
+    def create(self, websocket, tunnel_id: str | None = None) -> Tunnel:
+        """
+        Buat tunnel baru.
+        - tunnel_id diisi  → pakai ID tersebut (persistent tunnel dari client)
+        - tunnel_id None   → generate ID random baru
+        """
+        if tunnel_id and tunnel_id not in self._tunnels:
+            tid = tunnel_id
+        else:
+            # Generate ID random yang belum dipakai
+            while True:
+                tid = generate_tunnel_id()
+                if tid not in self._tunnels:
+                    break
 
         tunnel = Tunnel(tid, websocket)
         self._tunnels[tid] = tunnel
@@ -64,15 +71,14 @@ class TunnelManager:
     def remove(self, tunnel_id: str):
         tunnel = self._tunnels.pop(tunnel_id, None)
         if tunnel:
-            # Cancel semua request yang masih pending
             for rid in list(tunnel.pending.keys()):
                 tunnel.cancel_pending(rid)
 
     def list_all(self) -> list[dict]:
         return [
             {
-                "tunnel_id": t.tunnel_id,
-                "created_at": t.created_at,
+                "tunnel_id":       t.tunnel_id,
+                "created_at":      t.created_at,
                 "pending_requests": len(t.pending),
             }
             for t in self._tunnels.values()

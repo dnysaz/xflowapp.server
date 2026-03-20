@@ -22,6 +22,7 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 from aiohttp import web
 
 from tunnel import TunnelManager
+from tunnel_store import register, is_owner
 
 # ──────────────────────────────────────────────
 # Config
@@ -102,7 +103,29 @@ async def ws_handler(websocket):
         log.warning(f"Token salah dari {remote[0]}")
         return
 
-    tunnel = manager.create(websocket)
+    # ── Persistent tunnel ID ──
+    token        = msg.get("token", "")
+    requested_id = msg.get("tunnel_id", "").strip().lower() or None
+
+    if requested_id:
+        # Cek apakah ID sedang aktif di koneksi lain
+        if manager.get(requested_id):
+            await websocket.send(json.dumps({
+                "type": "error",
+                "message": f"tunnel '{requested_id}' sedang aktif di koneksi lain",
+            }))
+            return
+
+        # Validasi kepemilikan via tunnel_store (SQLite)
+        if not register(requested_id, token):
+            await websocket.send(json.dumps({
+                "type": "error",
+                "message": f"tunnel '{requested_id}' sudah dimiliki client lain",
+            }))
+            log.warning(f"Claim ditolak untuk tunnel '{requested_id}' dari {remote[0]}")
+            return
+
+    tunnel = manager.create(websocket, tunnel_id=requested_id)
     public_url = f"http://{PUBLIC_HOST}:{HTTP_PORT}/proxy/{tunnel.tunnel_id}/"
 
     await websocket.send(json.dumps({
