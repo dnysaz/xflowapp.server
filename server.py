@@ -111,21 +111,21 @@ async def ws_handler(websocket):
     requested_id = msg.get("tunnel_id", "").strip().lower() or None
 
     if requested_id:
-        # Cek apakah ID sedang aktif di koneksi lain
+        # Check if ID is already active in another connection
         if manager.get(requested_id):
             await websocket.send(json.dumps({
                 "type": "error",
-                "message": f"tunnel '{requested_id}' sedang aktif di koneksi lain",
+                "message": f"Tunnel '{requested_id}' is already in use. Please use another name.",
             }))
             return
 
-        # Validasi kepemilikan via tunnel_store (SQLite)
+        # Validate ownership via tunnel_store (SQLite)
         if not register(requested_id, token):
             await websocket.send(json.dumps({
                 "type": "error",
-                "message": f"tunnel '{requested_id}' sudah dimiliki client lain",
+                "message": f"Tunnel '{requested_id}' is already owned by another client.",
             }))
-            log.warning(f"Claim ditolak untuk tunnel '{requested_id}' dari {remote[0]}")
+            log.warning(f"Claim rejected for tunnel '{requested_id}' from {remote[0]}")
             return
 
     tunnel = manager.create(websocket, tunnel_id=requested_id)
