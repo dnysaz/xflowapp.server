@@ -63,10 +63,9 @@
   </div>
 
   <script>
-    const parts = window.location.pathname.split('/');
-    const idx   = parts.indexOf('proxy');
-    if (idx !== -1 && parts[idx + 1]) {
-      document.getElementById('tid').textContent = parts[idx + 1];
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if (parts[0]) {
+      document.getElementById('tid').textContent = parts[0];
     }
   </script>
 </body>

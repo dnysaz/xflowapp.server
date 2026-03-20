@@ -34,7 +34,8 @@ WS_PORT     = int(os.environ.get("XFLOW_WS_PORT", 8081))
 AUTH_TOKEN  = os.environ.get("XFLOW_TOKEN", "")
 LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
 HTML_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html")
-WELCOME_PARAM = "_xflow_ready"   # jika query param ini ada, skip welcome page
+WELCOME_PARAM  = "_xflow_ready"   # jika query param ini ada, skip welcome page
+RESERVED_PATHS = {"status", "ws", "api", "favicon.ico", "robots.txt"}  # paths that are not tunnel IDs
 
 
 def _read_html(filename: str, fallback: str) -> str:
@@ -129,7 +130,7 @@ async def ws_handler(websocket):
             return
 
     tunnel = manager.create(websocket, tunnel_id=requested_id)
-    public_url = f"http://{PUBLIC_HOST}:{HTTP_PORT}/proxy/{tunnel.tunnel_id}/"
+    public_url = f"http://{PUBLIC_HOST}:{HTTP_PORT}/{tunnel.tunnel_id}/"
 
     await websocket.send(json.dumps({
         "type": "welcome",
@@ -164,6 +165,11 @@ async def ws_handler(websocket):
 
 async def proxy_handler(request: web.Request) -> web.Response:
     tunnel_id = request.match_info["tunnel_id"]
+
+    # Don't intercept reserved system paths
+    if tunnel_id in RESERVED_PATHS:
+        return web.Response(status=404, text="Not found")
+
     path = "/" + request.match_info.get("path", "")
     if request.query_string:
         path += "?" + request.query_string
@@ -192,7 +198,7 @@ async def proxy_handler(request: web.Request) -> web.Response:
 
     tunnel = manager.get(tunnel_id)
     if not tunnel:
-        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 404 [tunnel tidak ada]")
+        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 404 [tunnel tidak ada]")
         html_404 = _read_html("404.html", f"<h3>404 — tunnel '{tunnel_id}' not found.</h3>")
         return web.Response(status=404, content_type="text/html", text=html_404)
 
@@ -219,16 +225,16 @@ async def proxy_handler(request: web.Request) -> web.Response:
         await tunnel.websocket.send(json.dumps(payload))
     except Exception as e:
         tunnel.cancel_pending(request_id)
-        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 502 [gagal kirim ke tunnel]")
+        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 502 [gagal kirim ke tunnel]")
         return web.Response(status=502, text=f"xflow: gagal kirim ke tunnel — {e}")
 
     try:
         resp_data = await asyncio.wait_for(fut, timeout=30)
     except asyncio.TimeoutError:
-        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 504 [timeout]")
+        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 504 [timeout]")
         return web.Response(status=504, text="xflow: timeout menunggu response dari client")
     except Exception as e:
-        access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} 502 [tunnel error]")
+        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 502 [tunnel error]")
         return web.Response(status=502, text=f"xflow: tunnel error — {e}")
 
     status = resp_data.get("status", 200)
@@ -239,7 +245,7 @@ async def proxy_handler(request: web.Request) -> web.Response:
         resp_headers.pop(h.title(), None)
 
     size = len(resp_body)
-    access_log.info(f"ACCESS {client_ip} {request.method} /proxy/{tunnel_id}{path} {status} {size}b")
+    access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} {status} {size}b")
 
     return web.Response(status=status, headers=resp_headers, body=resp_body)
 
@@ -280,11 +286,10 @@ async def home_handler(request: web.Request) -> web.Response:
 async def main():
     app = web.Application()
     app.router.add_get("/", home_handler)
-    app.router.add_get("/proxy/", home_handler)
     app.router.add_get("/status", status_handler)
     app.router.add_post("/api/welcome/{tunnel_id}/{action}", welcome_toggle_handler)
-    app.router.add_route("*", "/proxy/{tunnel_id}/{path:.*}", proxy_handler)
-    app.router.add_route("*", "/proxy/{tunnel_id}", proxy_handler)
+    app.router.add_route("*", "/{tunnel_id}/{path:.*}", proxy_handler)
+    app.router.add_route("*", "/{tunnel_id}", proxy_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()

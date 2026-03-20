@@ -87,10 +87,9 @@
     const countEl = document.getElementById('count');
     const countTxt = document.getElementById('count-text');
 
-    // Ambil tunnel ID dari URL: /proxy/<tunnel_id>/
-    const parts    = window.location.pathname.split('/');
-    const proxyIdx = parts.indexOf('proxy');
-    const tunnelId = proxyIdx !== -1 ? parts[proxyIdx + 1] : null;
+    // Ambil tunnel ID dari URL: /<tunnel_id>/
+    const parts    = window.location.pathname.split('/').filter(Boolean);
+    const tunnelId = parts[0] || null;
 
     // URL tujuan = URL yang sama tapi dengan flag ?_xflow_ready=1
     // agar server tahu harus forward ke app, bukan welcome page
