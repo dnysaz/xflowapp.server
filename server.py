@@ -72,6 +72,9 @@ access_log.propagate = False
 
 manager = TunnelManager()
 
+# tunnel_ids that have welcome page disabled (toggled via /api/welcome)
+welcome_disabled: set[str] = set()
+
 
 def check_token(token: str) -> bool:
     if not AUTH_TOKEN:
@@ -178,10 +181,11 @@ async def proxy_handler(request: web.Request) -> web.Response:
         and not is_asset
         and WELCOME_PARAM not in request.query_string
         and path in ("/", "")
+        and tunnel_id not in welcome_disabled
     ):
-        # Cek dulu apakah tunnel ada — jika tidak, langsung 404
+        # Check tunnel exists first — if not, fall through to 404
         if not manager.get(tunnel_id):
-            pass  # akan ditangani di bawah
+            pass  # handled below
         else:
             html_welcome = _read_html("welcome.html", "<meta http-equiv='refresh' content='0'>")
             return web.Response(status=200, content_type="text/html", text=html_welcome)
@@ -249,6 +253,19 @@ async def status_handler(request: web.Request) -> web.Response:
     })
 
 
+async def welcome_toggle_handler(request: web.Request) -> web.Response:
+    """Toggle welcome page on/off for a tunnel. Called from dashboard."""
+    tunnel_id = request.match_info.get("tunnel_id", "")
+    action    = request.match_info.get("action", "")  # "on" or "off"
+    if not tunnel_id:
+        return web.json_response({"error": "missing tunnel_id"}, status=400)
+    if action == "off":
+        welcome_disabled.add(tunnel_id)
+    elif action == "on":
+        welcome_disabled.discard(tunnel_id)
+    return web.json_response({"tunnel_id": tunnel_id, "welcome": action != "off"})
+
+
 async def home_handler(request: web.Request) -> web.Response:
     """Landing page untuk / dan /proxy/ agar tidak muncul error 404 default."""
     html = _read_html("home.html", "<h2>xflow server is running.</h2>")
@@ -265,6 +282,7 @@ async def main():
     app.router.add_get("/", home_handler)
     app.router.add_get("/proxy/", home_handler)
     app.router.add_get("/status", status_handler)
+    app.router.add_post("/api/welcome/{tunnel_id}/{action}", welcome_toggle_handler)
     app.router.add_route("*", "/proxy/{tunnel_id}/{path:.*}", proxy_handler)
     app.router.add_route("*", "/proxy/{tunnel_id}", proxy_handler)
 
