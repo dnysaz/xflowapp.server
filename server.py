@@ -224,6 +224,15 @@ async def proxy_handler(request: web.Request) -> web.Response:
     for h in ("host", "connection", "transfer-encoding"):
         headers.pop(h, None)
 
+    # Tell the app its real public base URL so it generates correct links/assets.
+    # Laravel reads X-Forwarded-* when TrustProxies middleware is enabled.
+    # The app thinks it's at http://PUBLIC_HOST:HTTP_PORT/TUNNEL_ID/
+    public_base = f"http://{PUBLIC_HOST}:{HTTP_PORT}"
+    headers["X-Forwarded-Host"]  = f"{PUBLIC_HOST}:{HTTP_PORT}"
+    headers["X-Forwarded-Proto"] = "http"
+    headers["X-Forwarded-Prefix"] = f"/{tunnel_id}"
+    headers["X-Original-URI"]    = f"/{tunnel_id}{path}"
+
     payload = {
         "type": "request",
         "request_id": request_id,
@@ -257,6 +266,53 @@ async def proxy_handler(request: web.Request) -> web.Response:
     for h in ("transfer-encoding", "connection", "content-encoding"):
         resp_headers.pop(h, None)
         resp_headers.pop(h.title(), None)
+
+    # Rewrite Location header on redirects so browser stays within the tunnel.
+    # e.g. Location: http://127.0.0.1:8000/login  →  /reld6h/login
+    #      Location: /login                        →  /reld6h/login
+    loc = resp_headers.get("Location") or resp_headers.get("location")
+    if loc and status in (301, 302, 303, 307, 308):
+        import re, urllib.parse
+        parsed = urllib.parse.urlparse(loc)
+        # Strip the local host:port if present — keep only the path
+        loc_path = parsed.path or "/"
+        if not loc_path.startswith(f"/{tunnel_id}"):
+            loc_path = f"/{tunnel_id}{loc_path}"
+        if parsed.query:
+            loc_path += "?" + parsed.query
+        resp_headers["Location"] = loc_path
+        resp_headers.pop("location", None)
+
+    # Rewrite absolute paths in HTML responses so assets and links work correctly.
+    # Only rewrite text/html responses — skip binary/json/css/js.
+    content_type = resp_headers.get("Content-Type", resp_headers.get("content-type", ""))
+    if "text/html" in content_type and resp_body:
+        try:
+            html = resp_body.decode("utf-8", errors="ignore")
+            prefix = f"/{tunnel_id}"
+
+            import re
+            # Rewrite href="/..." and src="/..." and action="/..." but NOT href="http..."
+            def rewrite_attr(m):
+                attr, quote, val = m.group(1), m.group(2), m.group(3)
+                if val.startswith("/") and not val.startswith(f"/{tunnel_id}") and not val.startswith("//"):
+                    return f'{attr}={quote}{prefix}{val}{quote}'
+                return m.group(0)
+
+            html = re.sub(r'(href|src|action)=(["\x27])(/[^"\x27]*?)\2', rewrite_attr, html)
+
+            # Rewrite window.location = "/" style JS redirects
+            html = html.replace("window.location='/'", f"window.location='/{tunnel_id}/'")
+            html = html.replace('window.location="/"', f'window.location="/{tunnel_id}/"')
+
+            resp_body = html.encode("utf-8")
+            # Update content-length if present
+            if "Content-Length" in resp_headers:
+                resp_headers["Content-Length"] = str(len(resp_body))
+            if "content-length" in resp_headers:
+                resp_headers["content-length"] = str(len(resp_body))
+        except Exception:
+            pass
 
     size = len(resp_body)
     access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} {status} {size}b")
