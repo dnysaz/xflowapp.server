@@ -224,14 +224,11 @@ async def proxy_handler(request: web.Request) -> web.Response:
     for h in ("host", "connection", "transfer-encoding"):
         headers.pop(h, None)
 
-    # Tell the app its real public base URL so it generates correct links/assets.
-    # Laravel reads X-Forwarded-* when TrustProxies middleware is enabled.
-    # The app thinks it's at http://PUBLIC_HOST:HTTP_PORT/TUNNEL_ID/
-    public_base = f"http://{PUBLIC_HOST}:{HTTP_PORT}"
-    headers["X-Forwarded-Host"]  = f"{PUBLIC_HOST}:{HTTP_PORT}"
-    headers["X-Forwarded-Proto"] = "http"
+    # Tell the app its real public base URL.
+    headers["X-Forwarded-Host"]   = f"{PUBLIC_HOST}:{HTTP_PORT}"
+    headers["X-Forwarded-Proto"]  = "http"
     headers["X-Forwarded-Prefix"] = f"/{tunnel_id}"
-    headers["X-Original-URI"]    = f"/{tunnel_id}{path}"
+    headers["X-Real-IP"]          = client_ip
 
     payload = {
         "type": "request",
@@ -270,12 +267,16 @@ async def proxy_handler(request: web.Request) -> web.Response:
     # Rewrite Location header on redirects so browser stays within the tunnel.
     # e.g. Location: http://127.0.0.1:8000/login  →  /reld6h/login
     #      Location: /login                        →  /reld6h/login
+    import re as _re, urllib.parse as _up
+
+    # ── Rewrite Location header on redirects ──
     loc = resp_headers.get("Location") or resp_headers.get("location")
     if loc and status in (301, 302, 303, 307, 308):
-        import re, urllib.parse
-        parsed = urllib.parse.urlparse(loc)
-        # Strip the local host:port if present — keep only the path
+        parsed   = _up.urlparse(loc)
         loc_path = parsed.path or "/"
+        # Strip local host if present in Location
+        if parsed.netloc:
+            loc_path = parsed.path or "/"
         if not loc_path.startswith(f"/{tunnel_id}"):
             loc_path = f"/{tunnel_id}{loc_path}"
         if parsed.query:
@@ -283,34 +284,49 @@ async def proxy_handler(request: web.Request) -> web.Response:
         resp_headers["Location"] = loc_path
         resp_headers.pop("location", None)
 
-    # Rewrite absolute paths in HTML responses so assets and links work correctly.
-    # Only rewrite text/html responses — skip binary/json/css/js.
-    content_type = resp_headers.get("Content-Type", resp_headers.get("content-type", ""))
-    if "text/html" in content_type and resp_body:
+    # ── Rewrite HTML body ──
+    ct = resp_headers.get("Content-Type", resp_headers.get("content-type", ""))
+    if "text/html" in ct and resp_body:
         try:
-            html = resp_body.decode("utf-8", errors="ignore")
-            prefix = f"/{tunnel_id}"
+            html   = resp_body.decode("utf-8", errors="ignore")
+            tid    = tunnel_id
+            base   = f"http://{PUBLIC_HOST}:{HTTP_PORT}"
+            prefix = f"/{tid}"
 
-            import re
-            # Rewrite href="/..." and src="/..." and action="/..." but NOT href="http..."
-            def rewrite_attr(m):
-                attr, quote, val = m.group(1), m.group(2), m.group(3)
-                if val.startswith("/") and not val.startswith(f"/{tunnel_id}") and not val.startswith("//"):
-                    return f'{attr}={quote}{prefix}{val}{quote}'
+            # 1. Inject <base> tag so relative URLs resolve correctly
+            if "<head" in html and f'<base href' not in html:
+                base_tag = f'<base href="{base}{prefix}/">'
+                html = html.replace("<head>", f"<head>{base_tag}", 1)
+                html = _re.sub(r"<head([^>]*)>", lambda m: f"<head{m.group(1)}>{base_tag}", html, count=1) if "<head>" not in html else html
+
+            # 2. Rewrite absolute URLs pointing to local server
+            for local in (f"http://127.0.0.1:8000", f"http://localhost:8000",
+                          f"http://127.0.0.1:3000", f"http://localhost:3000",
+                          f"http://127.0.0.1:5173", f"http://localhost:5173"):
+                html = html.replace(local + "/", base + prefix + "/")
+                html = html.replace(local, base + prefix)
+
+            # 3. Rewrite root-relative href/src/action="/..."
+            def fix_attr(m):
+                attr, q, val = m.group(1), m.group(2), m.group(3)
+                if not val.startswith(prefix) and not val.startswith("//") and not val.startswith("http"):
+                    return f"{attr}={q}{prefix}{val}{q}"
                 return m.group(0)
+            html = _re.sub(r'(href|src|action|data-src|data-href)=(")(/' + r'[^"]*)"', fix_attr, html)
+            html = _re.sub(r"(href|src|action|data-src|data-href)=(')(/" + r"[^']*)'", fix_attr, html)
 
-            html = re.sub(r'(href|src|action)=(["\x27])(/[^"\x27]*?)\2', rewrite_attr, html)
-
-            # Rewrite window.location = "/" style JS redirects
-            html = html.replace("window.location='/'", f"window.location='/{tunnel_id}/'")
-            html = html.replace('window.location="/"', f'window.location="/{tunnel_id}/"')
+            # 4. Rewrite JS: url("/...") and fetch("/...")
+            def fix_js_url(m):
+                q, val = m.group(1), m.group(2)
+                if not val.startswith(prefix) and not val.startswith("//"):
+                    return f"url({q}{prefix}{val}{q})"
+                return m.group(0)
+            pass  # url() rewriting handled by base tag
 
             resp_body = html.encode("utf-8")
-            # Update content-length if present
-            if "Content-Length" in resp_headers:
-                resp_headers["Content-Length"] = str(len(resp_body))
-            if "content-length" in resp_headers:
-                resp_headers["content-length"] = str(len(resp_body))
+            for hdr in ("Content-Length", "content-length"):
+                if hdr in resp_headers:
+                    resp_headers[hdr] = str(len(resp_body))
         except Exception:
             pass
 
