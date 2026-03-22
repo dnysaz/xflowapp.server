@@ -1,12 +1,12 @@
 """
-server.py — xflow server utama.
+server.py — xflow server.
 
-Jalankan via manage.py:
-  python manage.py start    ← jalankan background, simpan PID
-  python manage.py stop     ← matikan server
-  python manage.py restart  ← restart
-  python manage.py log      ← lihat log akses IP
-  python manage.py status   ← cek apakah server aktif
+Run via manage.py:
+  python manage.py start    start server in background
+  python manage.py stop     stop server
+  python manage.py restart  restart server
+  python manage.py log      view access log
+  python manage.py status   check server status
 """
 
 import asyncio
@@ -34,18 +34,20 @@ WS_PORT     = int(os.environ.get("XFLOW_WS_PORT", 8081))
 AUTH_TOKEN  = os.environ.get("XFLOW_TOKEN", "")
 LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
 HTML_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html")
-WELCOME_PARAM  = "_xflow_ready"   # jika query param ini ada, skip welcome page
-RESERVED_PATHS = {"status", "ws", "api", "favicon.ico", "robots.txt"}  # paths that are not tunnel IDs
+
+WELCOME_PARAM  = "_xflow_ready"
+RESERVED_PATHS = {"status", "ws", "api", "favicon.ico", "robots.txt"}
 
 
 def _read_html(filename: str, fallback: str) -> str:
-    """Baca file HTML dari folder html/, fallback ke string jika tidak ada."""
+    """Read an HTML file from the html/ folder, return fallback string if not found."""
     path = os.path.join(HTML_DIR, filename)
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return fallback
+
 
 # ──────────────────────────────────────────────
 # Logging — console + file
@@ -73,7 +75,7 @@ access_log.propagate = False
 
 manager = TunnelManager()
 
-# tunnel_ids that have welcome page disabled (toggled via /api/welcome)
+# Tunnel IDs with welcome page disabled (toggled via /api/welcome)
 welcome_disabled: set[str] = set()
 
 
@@ -89,30 +91,29 @@ def check_token(token: str) -> bool:
 
 async def ws_handler(websocket):
     remote = websocket.remote_address
-    log.info(f"Client konek dari {remote[0]}")
+    log.info(f"Client connected from {remote[0]}")
 
     try:
         raw = await asyncio.wait_for(websocket.recv(), timeout=10)
         msg = json.loads(raw)
     except (asyncio.TimeoutError, json.JSONDecodeError):
-        await websocket.send(json.dumps({"type": "error", "message": "handshake timeout atau format salah"}))
+        await websocket.send(json.dumps({"type": "error", "message": "Handshake timeout or invalid format."}))
         return
 
     if msg.get("type") != "hello":
-        await websocket.send(json.dumps({"type": "error", "message": "expected hello"}))
+        await websocket.send(json.dumps({"type": "error", "message": "Expected hello."}))
         return
 
     if not check_token(msg.get("token", "")):
-        await websocket.send(json.dumps({"type": "error", "message": "token tidak valid"}))
-        log.warning(f"Token salah dari {remote[0]}")
+        await websocket.send(json.dumps({"type": "error", "message": "Invalid token."}))
+        log.warning(f"Invalid token from {remote[0]}")
         return
 
-    # ── Persistent tunnel ID ──
+    # Persistent tunnel ID
     token        = msg.get("token", "")
     requested_id = msg.get("tunnel_id", "").strip().lower() or None
 
     if requested_id:
-        # Check if ID is already active in another connection
         if manager.get(requested_id):
             await websocket.send(json.dumps({
                 "type": "error",
@@ -120,7 +121,6 @@ async def ws_handler(websocket):
             }))
             return
 
-        # Validate ownership via tunnel_store (SQLite)
         if not register(requested_id, token):
             await websocket.send(json.dumps({
                 "type": "error",
@@ -129,16 +129,16 @@ async def ws_handler(websocket):
             log.warning(f"Claim rejected for tunnel '{requested_id}' from {remote[0]}")
             return
 
-    tunnel = manager.create(websocket, tunnel_id=requested_id)
+    tunnel     = manager.create(websocket, tunnel_id=requested_id)
     public_url = f"http://{PUBLIC_HOST}:{HTTP_PORT}/{tunnel.tunnel_id}/"
 
     await websocket.send(json.dumps({
-        "type": "welcome",
+        "type":      "welcome",
         "tunnel_id": tunnel.tunnel_id,
-        "url": public_url,
+        "url":       public_url,
     }))
 
-    log.info(f"Tunnel [{tunnel.tunnel_id}] aktif — {public_url}")
+    log.info(f"Tunnel [{tunnel.tunnel_id}] active — {public_url}")
 
     try:
         async for raw in websocket:
@@ -156,14 +156,14 @@ async def ws_handler(websocket):
         pass
     finally:
         manager.remove(tunnel.tunnel_id)
-        log.info(f"Tunnel [{tunnel.tunnel_id}] ditutup")
+        log.info(f"Tunnel [{tunnel.tunnel_id}] closed")
 
 
 # ──────────────────────────────────────────────
 # HTTP Proxy handler
 # ──────────────────────────────────────────────
 
-COOKIE_NAME = "xflow_tid"   # stores active tunnel_id in browser cookie
+COOKIE_NAME = "xflow_tid"
 
 
 async def proxy_handler(request: web.Request) -> web.Response:
@@ -179,23 +179,19 @@ async def proxy_handler(request: web.Request) -> web.Response:
 
     client_ip = request.headers.get("X-Forwarded-For", request.remote)
 
-    # ── Smart tunnel resolution ──
-    # If tunnel_id is not a known tunnel, check if the browser has a cookie
-    # pointing to an active tunnel — this handles internal app redirects like
-    # /login, /dashboard, /api/... that Laravel/Next.js etc. redirect to.
+    # Smart tunnel resolution — handle internal app redirects (e.g. /login, /dashboard)
+    # by checking the browser's xflow_tid cookie
     tunnel = manager.get(tunnel_id)
     if not tunnel:
-        # Try cookie
         cookie_tid = request.cookies.get(COOKIE_NAME)
         if cookie_tid and manager.get(cookie_tid):
-            # Rewrite: treat the whole path as /<tunnel_id>/<original_path>
             full_path = "/" + tunnel_id + path
             tunnel_id = cookie_tid
             path      = full_path
             tunnel    = manager.get(tunnel_id)
         else:
-            access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 404 [tunnel tidak ada]")
-            html_404 = _read_html("404.html", f"<h3>404 — tunnel '{tunnel_id}' not found.</h3>")
+            access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 404 [tunnel not found]")
+            html_404 = _read_html("404.html", f"<h3>404 — Tunnel '{tunnel_id}' not found.</h3>")
             return web.Response(status=404, content_type="text/html", text=html_404)
 
     is_asset = any(path.endswith(ext) for ext in (
@@ -203,7 +199,7 @@ async def proxy_handler(request: web.Request) -> web.Response:
         ".ico", ".woff", ".woff2", ".ttf", ".map", ".json",
     ))
 
-    # Welcome page on first visit
+    # Show welcome page on first visit to root
     if (
         request.method == "GET"
         and not is_asset
@@ -217,26 +213,26 @@ async def proxy_handler(request: web.Request) -> web.Response:
         return resp
 
     body_bytes = await request.read()
-    body_b64 = base64.b64encode(body_bytes).decode() if body_bytes else ""
+    body_b64   = base64.b64encode(body_bytes).decode() if body_bytes else ""
 
     request_id = str(uuid.uuid4())[:8]
-    headers = dict(request.headers)
+    headers    = dict(request.headers)
     for h in ("host", "connection", "transfer-encoding"):
         headers.pop(h, None)
 
-    # Tell the app its real public base URL.
+    # Forward headers so apps know their real public base URL
     headers["X-Forwarded-Host"]   = f"{PUBLIC_HOST}:{HTTP_PORT}"
     headers["X-Forwarded-Proto"]  = "http"
     headers["X-Forwarded-Prefix"] = f"/{tunnel_id}"
     headers["X-Real-IP"]          = client_ip
 
     payload = {
-        "type": "request",
+        "type":       "request",
         "request_id": request_id,
-        "method": request.method,
-        "path": path,
-        "headers": headers,
-        "body": body_b64,
+        "method":     request.method,
+        "path":       path,
+        "headers":    headers,
+        "body":       body_b64,
     }
 
     fut = tunnel.add_pending(request_id)
@@ -245,36 +241,32 @@ async def proxy_handler(request: web.Request) -> web.Response:
         await tunnel.websocket.send(json.dumps(payload))
     except Exception as e:
         tunnel.cancel_pending(request_id)
-        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 502 [gagal kirim ke tunnel]")
-        return web.Response(status=502, text=f"xflow: gagal kirim ke tunnel — {e}")
+        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 502 [send failed]")
+        return web.Response(status=502, text=f"xflow: failed to send to tunnel — {e}")
 
     try:
         resp_data = await asyncio.wait_for(fut, timeout=30)
     except asyncio.TimeoutError:
         access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 504 [timeout]")
-        return web.Response(status=504, text="xflow: timeout menunggu response dari client")
+        return web.Response(status=504, text="xflow: timeout waiting for client response")
     except Exception as e:
         access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 502 [tunnel error]")
         return web.Response(status=502, text=f"xflow: tunnel error — {e}")
 
-    status = resp_data.get("status", 200)
-    resp_body = base64.b64decode(resp_data.get("body", "")) if resp_data.get("body") else b""
+    status      = resp_data.get("status", 200)
+    resp_body   = base64.b64decode(resp_data.get("body", "")) if resp_data.get("body") else b""
     resp_headers = resp_data.get("headers", {})
     for h in ("transfer-encoding", "connection", "content-encoding"):
         resp_headers.pop(h, None)
         resp_headers.pop(h.title(), None)
 
-    # Rewrite Location header on redirects so browser stays within the tunnel.
-    # e.g. Location: http://127.0.0.1:8000/login  →  /reld6h/login
-    #      Location: /login                        →  /reld6h/login
     import re as _re, urllib.parse as _up
 
-    # ── Rewrite Location header on redirects ──
+    # Rewrite Location header on redirects so browser stays within the tunnel
     loc = resp_headers.get("Location") or resp_headers.get("location")
     if loc and status in (301, 302, 303, 307, 308):
         parsed   = _up.urlparse(loc)
         loc_path = parsed.path or "/"
-        # Strip local host if present in Location
         if parsed.netloc:
             loc_path = parsed.path or "/"
         if not loc_path.startswith(f"/{tunnel_id}"):
@@ -284,25 +276,26 @@ async def proxy_handler(request: web.Request) -> web.Response:
         resp_headers["Location"] = loc_path
         resp_headers.pop("location", None)
 
-    # ── Rewrite HTML body ──
+    # Rewrite HTML body — fix asset paths and links
     ct = resp_headers.get("Content-Type", resp_headers.get("content-type", ""))
     if "text/html" in ct and resp_body:
         try:
             html   = resp_body.decode("utf-8", errors="ignore")
-            tid    = tunnel_id
             base   = f"http://{PUBLIC_HOST}:{HTTP_PORT}"
-            prefix = f"/{tid}"
+            prefix = f"/{tunnel_id}"
 
-            # 1. Inject <base> tag so relative URLs resolve correctly
-            if "<head" in html and f'<base href' not in html:
+            # 1. Inject <base> tag — most effective fix for relative URLs
+            if "<head" in html and "<base href" not in html:
                 base_tag = f'<base href="{base}{prefix}/">'
-                html = html.replace("<head>", f"<head>{base_tag}", 1)
-                html = _re.sub(r"<head([^>]*)>", lambda m: f"<head{m.group(1)}>{base_tag}", html, count=1) if "<head>" not in html else html
+                if "<head>" in html:
+                    html = html.replace("<head>", f"<head>{base_tag}", 1)
+                else:
+                    html = _re.sub(r"<head([^>]*)>", lambda m: f"<head{m.group(1)}>{base_tag}", html, count=1)
 
-            # 2. Rewrite absolute URLs pointing to local server
-            for local in (f"http://127.0.0.1:8000", f"http://localhost:8000",
-                          f"http://127.0.0.1:3000", f"http://localhost:3000",
-                          f"http://127.0.0.1:5173", f"http://localhost:5173"):
+            # 2. Rewrite absolute local URLs in HTML
+            for local in ("http://127.0.0.1:8000", "http://localhost:8000",
+                          "http://127.0.0.1:3000", "http://localhost:3000",
+                          "http://127.0.0.1:5173", "http://localhost:5173"):
                 html = html.replace(local + "/", base + prefix + "/")
                 html = html.replace(local, base + prefix)
 
@@ -312,16 +305,9 @@ async def proxy_handler(request: web.Request) -> web.Response:
                 if not val.startswith(prefix) and not val.startswith("//") and not val.startswith("http"):
                     return f"{attr}={q}{prefix}{val}{q}"
                 return m.group(0)
+
             html = _re.sub(r'(href|src|action|data-src|data-href)=(")(/' + r'[^"]*)"', fix_attr, html)
             html = _re.sub(r"(href|src|action|data-src|data-href)=(')(/" + r"[^']*)'", fix_attr, html)
-
-            # 4. Rewrite JS: url("/...") and fetch("/...")
-            def fix_js_url(m):
-                q, val = m.group(1), m.group(2)
-                if not val.startswith(prefix) and not val.startswith("//"):
-                    return f"url({q}{prefix}{val}{q})"
-                return m.group(0)
-            pass  # url() rewriting handled by base tag
 
             resp_body = html.encode("utf-8")
             for hdr in ("Content-Length", "content-length"):
@@ -334,24 +320,23 @@ async def proxy_handler(request: web.Request) -> web.Response:
     access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} {status} {size}b")
 
     response = web.Response(status=status, headers=resp_headers, body=resp_body)
-    # Set cookie so subsequent internal redirects (e.g. /login) resolve correctly
     response.set_cookie(COOKIE_NAME, tunnel_id, max_age=86400, samesite="Lax")
     return response
 
 
 async def status_handler(request: web.Request) -> web.Response:
     return web.json_response({
-        "status": "ok",
-        "host": PUBLIC_HOST,
-        "tunnels": manager.count,
+        "status":      "ok",
+        "host":        PUBLIC_HOST,
+        "tunnels":     manager.count,
         "tunnel_list": manager.list_all(),
     })
 
 
 async def welcome_toggle_handler(request: web.Request) -> web.Response:
-    """Toggle welcome page on/off for a tunnel. Called from dashboard."""
+    """Toggle welcome page on/off for a specific tunnel."""
     tunnel_id = request.match_info.get("tunnel_id", "")
-    action    = request.match_info.get("action", "")  # "on" or "off"
+    action    = request.match_info.get("action", "")
     if not tunnel_id:
         return web.json_response({"error": "missing tunnel_id"}, status=400)
     if action == "off":
@@ -362,7 +347,7 @@ async def welcome_toggle_handler(request: web.Request) -> web.Response:
 
 
 async def home_handler(request: web.Request) -> web.Response:
-    """Landing page untuk / dan /proxy/ agar tidak muncul error 404 default."""
+    """Landing page for / — shown when no tunnel ID is in the URL."""
     html = _read_html("home.html", "<h2>xflow server is running.</h2>")
     html = html.replace("{{ host }}", f"{PUBLIC_HOST}:{HTTP_PORT}")
     return web.Response(status=200, content_type="text/html", text=html)
@@ -384,18 +369,18 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
     await site.start()
-    log.info(f"HTTP proxy    : http://0.0.0.0:{HTTP_PORT}  (publik: http://{PUBLIC_HOST}:{HTTP_PORT})")
+    log.info(f"HTTP proxy    : http://0.0.0.0:{HTTP_PORT}  (public: http://{PUBLIC_HOST}:{HTTP_PORT})")
 
     ws_server = await websockets.serve(ws_handler, "0.0.0.0", WS_PORT)
     log.info(f"WebSocket     : ws://0.0.0.0:{WS_PORT}")
-    log.info(f"Auth token    : {'aktif' if AUTH_TOKEN else 'nonaktif (mode dev)'}")
+    log.info(f"Auth token    : {'enabled' if AUTH_TOKEN else 'disabled (dev mode)'}")
     log.info(f"Access log    : {LOG_FILE}")
-    log.info("xflow-server siap. Tekan Ctrl+C untuk berhenti.")
+    log.info("xflow server ready. Press Ctrl+C to stop.")
 
     try:
         await asyncio.Future()
     except (KeyboardInterrupt, asyncio.CancelledError):
-        log.info("Shutdown...")
+        log.info("Shutting down...")
     finally:
         ws_server.close()
         await ws_server.wait_closed()
