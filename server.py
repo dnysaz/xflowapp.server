@@ -163,6 +163,9 @@ async def ws_handler(websocket):
 # HTTP Proxy handler
 # ──────────────────────────────────────────────
 
+COOKIE_NAME = "xflow_tid"   # stores active tunnel_id in browser cookie
+
+
 async def proxy_handler(request: web.Request) -> web.Response:
     tunnel_id = request.match_info["tunnel_id"]
 
@@ -176,12 +179,31 @@ async def proxy_handler(request: web.Request) -> web.Response:
 
     client_ip = request.headers.get("X-Forwarded-For", request.remote)
 
-    # Tampilkan welcome page jika request pertama (belum ada _xflow_ready)
-    # Hanya untuk GET request dan bukan asset (js, css, image, dll)
+    # ── Smart tunnel resolution ──
+    # If tunnel_id is not a known tunnel, check if the browser has a cookie
+    # pointing to an active tunnel — this handles internal app redirects like
+    # /login, /dashboard, /api/... that Laravel/Next.js etc. redirect to.
+    tunnel = manager.get(tunnel_id)
+    if not tunnel:
+        # Try cookie
+        cookie_tid = request.cookies.get(COOKIE_NAME)
+        if cookie_tid and manager.get(cookie_tid):
+            # Rewrite: treat the whole path as /<tunnel_id>/<original_path>
+            full_path = "/" + tunnel_id + path
+            tunnel_id = cookie_tid
+            path      = full_path
+            tunnel    = manager.get(tunnel_id)
+        else:
+            access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 404 [tunnel tidak ada]")
+            html_404 = _read_html("404.html", f"<h3>404 — tunnel '{tunnel_id}' not found.</h3>")
+            return web.Response(status=404, content_type="text/html", text=html_404)
+
     is_asset = any(path.endswith(ext) for ext in (
         ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
         ".ico", ".woff", ".woff2", ".ttf", ".map", ".json",
     ))
+
+    # Welcome page on first visit
     if (
         request.method == "GET"
         and not is_asset
@@ -189,18 +211,10 @@ async def proxy_handler(request: web.Request) -> web.Response:
         and path in ("/", "")
         and tunnel_id not in welcome_disabled
     ):
-        # Check tunnel exists first — if not, fall through to 404
-        if not manager.get(tunnel_id):
-            pass  # handled below
-        else:
-            html_welcome = _read_html("welcome.html", "<meta http-equiv='refresh' content='0'>")
-            return web.Response(status=200, content_type="text/html", text=html_welcome)
-
-    tunnel = manager.get(tunnel_id)
-    if not tunnel:
-        access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} 404 [tunnel tidak ada]")
-        html_404 = _read_html("404.html", f"<h3>404 — tunnel '{tunnel_id}' not found.</h3>")
-        return web.Response(status=404, content_type="text/html", text=html_404)
+        html_welcome = _read_html("welcome.html", "<meta http-equiv='refresh' content='0'>")
+        resp = web.Response(status=200, content_type="text/html", text=html_welcome)
+        resp.set_cookie(COOKIE_NAME, tunnel_id, max_age=86400, samesite="Lax")
+        return resp
 
     body_bytes = await request.read()
     body_b64 = base64.b64encode(body_bytes).decode() if body_bytes else ""
@@ -247,7 +261,10 @@ async def proxy_handler(request: web.Request) -> web.Response:
     size = len(resp_body)
     access_log.info(f"ACCESS {client_ip} {request.method} /{tunnel_id}{path} {status} {size}b")
 
-    return web.Response(status=status, headers=resp_headers, body=resp_body)
+    response = web.Response(status=status, headers=resp_headers, body=resp_body)
+    # Set cookie so subsequent internal redirects (e.g. /login) resolve correctly
+    response.set_cookie(COOKIE_NAME, tunnel_id, max_age=86400, samesite="Lax")
+    return response
 
 
 async def status_handler(request: web.Request) -> web.Response:
